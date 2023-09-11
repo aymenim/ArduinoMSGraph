@@ -14,6 +14,7 @@
 
 #define MSGRAPH_DEBUG = 1
 
+
 #define DBG_PRINT(x) Serial.print(x)
 #define DBG_PRINTLN(x) Serial.println(x)
 
@@ -22,8 +23,9 @@
 #include <Arduino.h>
 #include <vector>
 #include <ArduinoJson.h>
-#include <HTTPClient.h>
-#include "SPIFFS.h"
+#include <ESP8266HTTPClient.h>
+#include <ESP8266WiFi.h>
+#include "LittleFS.h"
 
 typedef struct {
 	bool hasError = false;
@@ -66,10 +68,10 @@ typedef struct {
 
 class ArduinoMSGraph {
 public:
-	Client *client;
+	WiFiClientSecure *client;
 
 	// Constructor
-	ArduinoMSGraph(Client &client, const char *tenant, const char *clientId);
+	ArduinoMSGraph(WiFiClientSecure &client, const char *tenant, const char *clientId);
 
 	// Generic Request Methods
 	bool requestJsonApi(JsonDocument &doc, const char *url, const char *payload = "", const char *method = "POST", bool sendAuth = false, GraphRequestHeader extraHeader = { NULL, NULL });
@@ -78,10 +80,10 @@ public:
 	int getTokenLifetime();
 	GraphError getLastError();
 
-	// SPIFFS Helper
-	bool saveContextToSPIFFS();
-	bool readContextFromSPIFFS();
-	bool removeContextFromSPIFFS();
+	// LittleFS Helper
+	bool saveContextToLittleFS();
+	bool readContextFromLittleFS();
+	bool removeContextFromLittleFS();
 
 	// Authentication Methods
 	bool startDeviceLoginFlow(JsonDocument &doc, const char *scope = "offline_access%20openid%20Presence.Read");
