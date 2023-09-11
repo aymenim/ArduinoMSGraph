@@ -19,7 +19,7 @@
  * @param tenant GUID or name of the tenant (e.g. contoso.onmicrosoft.com)
  * @param clientID Client ID of the Azure AD app
  */
-ArduinoMSGraph::ArduinoMSGraph(Client &client, const char *tenant, const char *clientId) {
+ArduinoMSGraph::ArduinoMSGraph(WiFiClientSecure &client, const char *tenant, const char *clientId) {
     this->client = &client;
     this->_tenant = tenant;
     this->_clientId = clientId;
@@ -38,12 +38,12 @@ ArduinoMSGraph::ArduinoMSGraph(Client &client, const char *tenant, const char *c
  * @returns True if request successful, false on error.
  */
 bool ArduinoMSGraph::requestJsonApi(JsonDocument& responseDoc, const char *url, const char *payload, const char *method, bool sendAuth, GraphRequestHeader extraHeader) {
-	const char* cert;
-	if (strstr(url, "graph.microsoft.com") != NULL) {
-		cert = rootCACertificateGraph;
-	} else {
-		cert = rootCACertificateLogin;
-	}
+	// const char* cert;
+	// if (strstr(url, "graph.microsoft.com") != NULL) {
+	// 	cert = rootCACertificateGraph;
+	// } else {
+	// 	cert = rootCACertificateLogin;
+	// }
 
 	#ifdef MSGRAPH_DEBUG
 		DBG_PRINT("ESP.getFreeHeap(): ");
@@ -52,14 +52,16 @@ bool ArduinoMSGraph::requestJsonApi(JsonDocument& responseDoc, const char *url, 
 
 	// HTTPClient
 	HTTPClient https;
+	WiFiClientSecure client;
+	client.setInsecure(); //the magic line, use with caution
 
 	// Prepare empty response
 	const int emptyCapacity = JSON_OBJECT_SIZE(1);
 	DynamicJsonDocument emptyDoc(emptyCapacity);
 
 	// DBG_PRINT("[HTTPS] begin...\n");
-    if (https.begin(url, cert)) {
-		https.setConnectTimeout(10000);
+    if (https.begin(client, url)) {
+		// https.setConnectTimeout(10000);
 		https.setTimeout(10000);
 		https.useHTTP10(true);
 
@@ -88,15 +90,19 @@ bool ArduinoMSGraph::requestJsonApi(JsonDocument& responseDoc, const char *url, 
 
 			// File found at server (HTTP 200, 301), or HTTP 400, 401 with response payload
 			if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_BAD_REQUEST || httpCode == HTTP_CODE_UNAUTHORIZED) {
-				String payload = https.getString(); 
-				payload.replace("'", ""); // Delete single quotes
+				// ESP.setIramHeap();
+				// String payload = https.getString();
+				// ESP.resetHeap();
+				
+				// DBG_PRINTLN(payload.c_str());
+				// payload.replace("'", ""); // Delete single quotes
 				// if (strstr(url, "events") != NULL) {
 				// 	DBG_PRINTLN(payload);
 				// }
 
 				// Parse JSON data
 				// DeserializationError error = deserializeJson(responseDoc, https.getStream());
-				DeserializationError error = deserializeJson(responseDoc, payload);
+				DeserializationError error = deserializeJson(responseDoc, https.getStream());
 				if (error) {
 					DBG_PRINT(F("requestJsonApi() - deserializeJson() failed: "));
 					DBG_PRINTLN(error.c_str());
@@ -185,9 +191,9 @@ bool ArduinoMSGraph::pollForToken(JsonDocument &responseDoc, const char *device_
 	} else {
 		if (responseDoc.containsKey("access_token") && responseDoc.containsKey("refresh_token")) {
 			// Store tokens in context
-			_context.access_token = strdup(responseDoc["access_token"].as<char *>());
-			_context.refresh_token = strdup(responseDoc["refresh_token"].as<char *>());
-			_context.id_token = strdup(responseDoc["id_token"].as<char *>());
+			_context.access_token = strdup(responseDoc["access_token"].as<const char *>());
+			_context.refresh_token = strdup(responseDoc["refresh_token"].as<const char *>());
+			_context.id_token = strdup(responseDoc["id_token"].as<const char *>());
 			unsigned int _expires_in = responseDoc["expires_in"].as<unsigned long>();
 			_context.expires = millis() + (_expires_in * 1000); // Calculate timestamp when token expires
 
@@ -228,15 +234,15 @@ bool ArduinoMSGraph::refreshToken() {
 	// Replace tokens and expiration
 	if (res && responseDoc.containsKey("access_token") && responseDoc.containsKey("refresh_token")) {
 		if (!responseDoc["access_token"].isNull()) {
-			_context.access_token = strdup(responseDoc["access_token"].as<char *>());
+			_context.access_token = strdup(responseDoc["access_token"].as<const char *>());
 			success = true;
 		}
 		if (!responseDoc["refresh_token"].isNull()) {
-			_context.refresh_token = strdup(responseDoc["refresh_token"].as<char *>());
+			_context.refresh_token = strdup(responseDoc["refresh_token"].as<const char *>());
 			success = true;
 		}
 		if (!responseDoc["id_token"].isNull()) {
-			_context.id_token = strdup(responseDoc["id_token"].as<char *>());
+			_context.id_token = strdup(responseDoc["id_token"].as<const char *>());
 		}
 		if (!responseDoc["expires_in"].isNull()) {
 			int _expires_in = responseDoc["expires_in"].as<unsigned long>();
@@ -255,11 +261,11 @@ bool ArduinoMSGraph::refreshToken() {
 
 
 /**
- * Save current Graph context in a JSON file in SPIFFS.
+ * Save current Graph context in a JSON file in LittleFS.
  * 
  * @returns True if saving was successful.
  */
-bool ArduinoMSGraph::saveContextToSPIFFS() {
+bool ArduinoMSGraph::saveContextToLittleFS() {
 	const size_t capacity = JSON_OBJECT_SIZE(3) + 5000;
 	DynamicJsonDocument contextDoc(capacity);
 
@@ -267,12 +273,12 @@ bool ArduinoMSGraph::saveContextToSPIFFS() {
 	contextDoc["refresh_token"] = _context.refresh_token;
 	contextDoc["id_token"] = _context.id_token;
 
-	File contextFile = SPIFFS.open(CONTEXT_FILE, FILE_WRITE);
+	File contextFile = LittleFS.open(CONTEXT_FILE, "w");
 	size_t bytesWritten = serializeJsonPretty(contextDoc, contextFile);
 	contextFile.close();
 
 	#ifdef MSGRAPH_DEBUG
-		DBG_PRINT(F("saveContextInSPIFFS() - Success - Bytes written: "));
+		DBG_PRINT(F("saveContextInLittleFS() - Success - Bytes written: "));
 		DBG_PRINTLN(bytesWritten);
 		// DBG_PRINTLN(contextDoc.as<String>());
 	#endif
@@ -282,49 +288,49 @@ bool ArduinoMSGraph::saveContextToSPIFFS() {
 
 
 /**
- * Try to restote Graph context from SPIFFS
+ * Try to restote Graph context from LittleFS
  * 
  * @returns True if restore was successful.
  */
-bool ArduinoMSGraph::readContextFromSPIFFS() {
-	File file = SPIFFS.open(CONTEXT_FILE);
+bool ArduinoMSGraph::readContextFromLittleFS() {
+	File file = LittleFS.open(CONTEXT_FILE, "r");
 	bool success = false;
 
 	if (!file) {
-		DBG_PRINTLN(F("readContextFromSPIFFS() - No file found"));
+		DBG_PRINTLN(F("readContextFromLittleFS() - No file found"));
 	} else {
 		size_t size = file.size();
 		if (size == 0) {
-			DBG_PRINTLN(F("readContextFromSPIFFS() - File empty"));
+			DBG_PRINTLN(F("readContextFromLittleFS() - File empty"));
 		} else {
 			const int capacity = JSON_OBJECT_SIZE(3) + 5000;
 			DynamicJsonDocument contextDoc(capacity);
 			DeserializationError err = deserializeJson(contextDoc, file);
 
 			if (err) {
-				DBG_PRINT(F("readContextFromSPIFFS() - deserializeJson() failed with code: "));
+				DBG_PRINT(F("readContextFromLittleFS() - deserializeJson() failed with code: "));
 				DBG_PRINTLN(err.c_str());
 			} else {
 				int numSettings = 0;
 				if (!contextDoc["access_token"].isNull()) {
-					_context.access_token = strdup(contextDoc["access_token"].as<char *>());
+					_context.access_token = strdup(contextDoc["access_token"].as<const char *>());
 					numSettings++;
 				}
 				if (!contextDoc["refresh_token"].isNull()) {
-					_context.refresh_token = strdup(contextDoc["refresh_token"].as<char *>());
+					_context.refresh_token = strdup(contextDoc["refresh_token"].as<const char *>());
 					numSettings++;
 				}
 				if (!contextDoc["id_token"].isNull()){
-					_context.id_token = strdup(contextDoc["id_token"].as<char *>());
+					_context.id_token = strdup(contextDoc["id_token"].as<const char *>());
 				}
 				_context.expires = 0;
 				if (numSettings >= 2) {
 					#ifdef MSGRAPH_DEBUG
-						DBG_PRINTLN(F("readContextFromSPIFFS() - Success"));
+						DBG_PRINTLN(F("readContextFromLittleFS() - Success"));
 					#endif
 					success = true;
 				} else {
-					Serial.printf("readContextFromSPIFFS() - ERROR Number of valid settings in file: %d, should greater or equals 2.\n", numSettings);
+					Serial.printf("readContextFromLittleFS() - ERROR Number of valid settings in file: %d, should greater or equals 2.\n", numSettings);
 				}
 				// DBG_PRINTLN(contextDoc.as<String>());
 			}
@@ -337,16 +343,16 @@ bool ArduinoMSGraph::readContextFromSPIFFS() {
 
 
 /**
- * Remove the stored context from SPIFFS.
+ * Remove the stored context from LittleFS.
  * 
  * @returns True when removing was successful
  */
-bool ArduinoMSGraph::removeContextFromSPIFFS() {
+bool ArduinoMSGraph::removeContextFromLittleFS() {
 	#ifdef MSGRAPH_DEBUG
-		DBG_PRINTLN(F("removeContextFromSPIFFS()"));
+		DBG_PRINTLN(F("removeContextFromLittleFS()"));
 	#endif
 
-	return SPIFFS.remove(CONTEXT_FILE);
+	return LittleFS.remove(CONTEXT_FILE);
 }
 
 
@@ -373,9 +379,9 @@ GraphPresence ArduinoMSGraph::getUserPresence() {
 		_handleApiError(responseDoc, resultError);
 	} else {
 		// Return presence info
-		result.id = (char *)responseDoc["id"].as<char *>();
-		result.availability = (char *)responseDoc["availability"].as<char *>();
-		result.activity = (char *)responseDoc["activity"].as<char *>();
+		result.id = (char *)responseDoc["id"].as<const char *>();
+		result.availability = (char *)responseDoc["availability"].as<const char *>();
+		result.activity = (char *)responseDoc["activity"].as<const char *>();
 	}
 
 	this->_lastError = resultError;
@@ -421,14 +427,14 @@ std::vector<GraphEvent> ArduinoMSGraph::getUserEvents(int count, const char *tim
 
 			for (JsonObject item : items) {
 				GraphEvent event;
-				event.id = (char *)item["id"].as<char *>();
-				event.subject = (char *)item["subject"].as<char *>();
-				event.locationTitle = (char *)item["location"]["displayName"].as<char *>();
-				event.bodyPreview = (char *)item["bodyPreview"].as<char *>();
-				event.startDate.dateTime = (char *)item["start"]["dateTime"].as<char *>();
-				event.startDate.timeZone = (char *)item["start"]["timeZone"].as<char *>();
-				event.endDate.dateTime = (char *)item["end"]["dateTime"].as<char *>();
-				event.endDate.timeZone = (char *)item["end"]["timeZone"].as<char *>();
+				event.id = (char *)item["id"].as<const char *>();
+				event.subject = (char *)item["subject"].as<const char *>();
+				event.locationTitle = (char *)item["location"]["displayName"].as<const char *>();
+				event.bodyPreview = (char *)item["bodyPreview"].as<const char *>();
+				event.startDate.dateTime = (char *)item["start"]["dateTime"].as<const char *>();
+				event.startDate.timeZone = (char *)item["start"]["timeZone"].as<const char *>();
+				event.endDate.dateTime = (char *)item["end"]["dateTime"].as<const char *>();
+				event.endDate.timeZone = (char *)item["end"]["timeZone"].as<const char *>();
 
 				result.push_back(event);
 			}
@@ -460,7 +466,7 @@ void ArduinoMSGraph::_handleApiError(JsonDocument &errorDoc, GraphError &errorOb
 		#endif
 	}
 
-	errorObject.message = (char *)errorDoc["error"]["code"].as<char *>();
+	errorObject.message = (char *)errorDoc["error"]["code"].as<const char *>();
 	errorObject.hasError = true;
 }
 
